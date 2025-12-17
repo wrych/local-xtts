@@ -97,17 +97,21 @@ def status(conversion_id):
     # Frontend triggers `playFromIndex`. If `sentenceAudioUrls[idx]` is set, it plays.
     
     chunk_urls_map = {}
+    chunk_durations_map = {}
     for c in chunks:
         if c["status"] == "done" and c["audio_filename"]:
             chunk_urls_map[c["seq_num"]] = url_for("static", filename=c["audio_filename"])
+            chunk_durations_map[c["seq_num"]] = c.get("duration", 0.0)
             
     # Convert map to list if frontend expects list (it does `data.chunk_urls.forEach((url, idx)`)
     # We must ensure list covers up to max index.
     max_idx = total - 1
     url_list = [None] * total
+    duration_list = [0.0] * total
     for seq, url in chunk_urls_map.items():
         if seq < total:
             url_list[seq] = url
+            duration_list[seq] = chunk_durations_map[seq]
             
     # Check full audio
     audio_url = None
@@ -122,6 +126,9 @@ def status(conversion_id):
         "done": done_count,
         "progress": progress,
         "chunk_urls": url_list,
+        "chunk_durations": duration_list,
+        "estimated_duration": data.get("estimated_duration", 0.0),
+        "total_duration": data.get("total_duration", 0.0)
         # "saved_filename": ... 
     })
 
@@ -166,22 +173,39 @@ def get_jobs_status():
     active_jobs = []
     
     for c in conversions:
-        if c["status"] in ["queued", "processing", "converting"]:
-            # Recalculate progress if needed, or trust stored fields
-            # db.get_all_conversions returns rows with 'processed_chunks' and 'total_chunks'
-            # Note: processed_chunks in DB is updated by update_chunk_status.
-            
-            total = c["total_chunks"]
-            processed = c["processed_chunks"]
-            progress = (processed / total) if total > 0 else 0
-            
-            active_jobs.append({
-                "id": c["id"],
-                "status": c["status"],
-                "progress": progress,
-                "processed": processed,
-                "total": total
-            })
+        # Include all jobs or just active?
+        # Sidebar polls this to update progress bars.
+        # If we want to update even "done" jobs (for delete handling etc), we might want to return all?
+        # But for efficiency usually just active.
+        # However, frontend logic removes bars if not in list.
+        # Wait, if we want to show 'done' status correctly, we should return done jobs too if they were recently active?
+        # Or just return active ones as before.
+        
+        # New requirement: "if a conversion has been fully played, show completed and the full duration as text"
+        # The sidebar updates rely on this endpoint for active jobs.
+        # For inactive jobs (done), sidebar relies on initial render + polling updates.
+        # If a job is done, it drops from this list, bar is removed.
+        # If we want to show dynamic "played" progress for all jobs, we need to return play progress for all jobs?
+        # Or maybe frontend can just use `last_played_index` from initial page load?
+        # But if we want to update play progress in sidebar while listening, we need it here OR in a separate poll.
+        # Since `pollSidebar` calls this every 2s, we can include played info here.
+        # To avoid returning huge list every time, maybe return all? 
+        # `db.get_all_conversions` is relatively small for single user app.
+        
+        total = c["total_chunks"]
+        processed = c["processed_chunks"]
+        progress = (processed / total) if total > 0 else 0
+        
+        active_jobs.append({
+            "id": c["id"],
+            "status": c["status"],
+            "progress": progress,
+            "processed": processed,
+            "total": total,
+            "last_played_index": c.get("last_played_index", -1),
+            "total_duration": c.get("total_duration", 0.0),
+            "estimated_duration": c.get("estimated_duration", 0.0)
+        })
             
     return jsonify({"jobs": active_jobs})
 
@@ -195,4 +219,5 @@ def delete_conversion():
     return jsonify({"error": "Missing data"}), 400
 
 if __name__ == "__main__":
+    # app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
     app.run(host="0.0.0.0", port=5000, debug=True)

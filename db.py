@@ -29,7 +29,9 @@ def init_db():
                 last_played_index INTEGER DEFAULT -1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 speaker TEXT,
-                language TEXT
+                language TEXT,
+                estimated_duration REAL DEFAULT 0.0,
+                total_duration REAL DEFAULT 0.0
             )
         """)
         
@@ -44,6 +46,16 @@ def init_db():
         except sqlite3.OperationalError:
             pass # already exists
 
+        try:
+            c.execute("ALTER TABLE conversions ADD COLUMN estimated_duration REAL DEFAULT 0.0")
+        except sqlite3.OperationalError:
+            pass 
+
+        try:
+            c.execute("ALTER TABLE conversions ADD COLUMN total_duration REAL DEFAULT 0.0")
+        except sqlite3.OperationalError:
+            pass 
+
         # Chunks table
         c.execute("""
             CREATE TABLE IF NOT EXISTS chunks (
@@ -53,14 +65,20 @@ def init_db():
                 text TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',
                 audio_filename TEXT,
+                duration REAL DEFAULT 0.0,
                 FOREIGN KEY (conversion_id) REFERENCES conversions (id)
             )
         """)
+
+        try:
+            c.execute("ALTER TABLE chunks ADD COLUMN duration REAL DEFAULT 0.0")
+        except sqlite3.OperationalError:
+            pass 
         
         conn.commit()
         conn.close()
 
-def create_conversion(title: str, text: str, chunks_data: list[str], speaker: str = None, language: str = None) -> str:
+def create_conversion(title: str, text: str, chunks_data: list[str], speaker: str = None, language: str = None, estimated_duration: float = 0.0) -> str:
     """
     Creates a new conversion and its chunks transactionally.
     chunks_data is a listing of text strings.
@@ -74,9 +92,9 @@ def create_conversion(title: str, text: str, chunks_data: list[str], speaker: st
         try:
             # 1. Insert Conversion
             conn.execute("""
-                INSERT INTO conversions (id, title, text, status, total_chunks, processed_chunks, speaker, language)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (conversion_id, title, text, 'queued', total_chunks, 0, speaker, language))
+                INSERT INTO conversions (id, title, text, status, total_chunks, processed_chunks, speaker, language, estimated_duration)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (conversion_id, title, text, 'queued', total_chunks, 0, speaker, language, estimated_duration))
             
             # 2. Insert Chunks
             chunk_rows = []
@@ -127,7 +145,7 @@ def get_conversion(conversion_id: str):
         conn.close()
         return dict(row) if row else None
 
-def update_chunk_status(conversion_id: str, seq_num: int, status: str, audio_filename: str = None):
+def update_chunk_status(conversion_id: str, seq_num: int, status: str, audio_filename: str = None, duration: float = 0.0):
     with DB_LOCK:
         conn = get_connection()
         try:
@@ -135,9 +153,9 @@ def update_chunk_status(conversion_id: str, seq_num: int, status: str, audio_fil
             if audio_filename:
                 conn.execute("""
                     UPDATE chunks 
-                    SET status = ?, audio_filename = ? 
+                    SET status = ?, audio_filename = ?, duration = ?
                     WHERE conversion_id = ? AND seq_num = ?
-                """, (status, audio_filename, conversion_id, seq_num))
+                """, (status, audio_filename, duration, conversion_id, seq_num))
             else:
                  conn.execute("""
                     UPDATE chunks 
@@ -152,6 +170,14 @@ def update_chunk_status(conversion_id: str, seq_num: int, status: str, audio_fil
                 SELECT COUNT(*) FROM chunks WHERE conversion_id = ? AND status = 'done'
             """, (conversion_id,)).fetchone()[0]
             
+            # Recalculate total duration logic?
+            # We want total_duration to trigger accumulation when done.
+            # Or we can accumulate on the fly.
+            # Let's sum duration for all 'done' chunks
+            total_dur = conn.execute("""
+                SELECT SUM(duration) FROM chunks WHERE conversion_id = ?
+            """, (conversion_id,)).fetchone()[0] or 0.0
+
             # Check if all done
             total = conn.execute("SELECT total_chunks FROM conversions WHERE id = ?", (conversion_id,)).fetchone()[0]
             
@@ -161,9 +187,9 @@ def update_chunk_status(conversion_id: str, seq_num: int, status: str, audio_fil
             
             conn.execute("""
                 UPDATE conversions 
-                SET processed_chunks = ?, status = ? 
+                SET processed_chunks = ?, status = ?, total_duration = ?
                 WHERE id = ?
-            """, (count, conv_status, conversion_id))
+            """, (count, conv_status, total_dur, conversion_id))
             
             conn.commit()
         finally:

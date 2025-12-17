@@ -6,6 +6,7 @@ let audio = null;
 let currentIndex = null; // index currently playing (or to be played)
 let playedUntil = -1;    // highest index fully played
 let waitingForNext = false;
+let autoScrollEnabled = true;
 let totalLogicalSentences = 0;
 
 // Config from backend
@@ -111,9 +112,21 @@ function updateSentenceStyles(total) {
     });
 
     // Auto-scroll logic if playing
-    if (audio && !audio.paused && currentIndex !== null) {
-        // const el = container.querySelector(`.sentence[data-index="${currentIndex}"]`);
-        // if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (audio && !audio.paused && currentIndex !== null && autoScrollEnabled) {
+        const el = container.querySelector(`.sentence[data-index="${currentIndex}"]`);
+        if (el) {
+            // Smart Scroll: Keep in top 3rd
+            // Calculate target scroll position
+            // We want el.offsetTop to be around 30% of the container height visible
+            const containerHeight = container.clientHeight;
+            const targetTop = el.offsetTop - (containerHeight * 0.3);
+
+            // Smooth scroll to that position
+            container.scrollTo({
+                top: targetTop,
+                behavior: "smooth"
+            });
+        }
     }
 }
 
@@ -124,10 +137,15 @@ function ensureAudio() {
         audio.addEventListener("play", () => {
             updateSentenceStyles(totalLogicalSentences);
             updateControls();
+            updateDurationDisplay();
         });
         audio.addEventListener("pause", () => {
             updateSentenceStyles(totalLogicalSentences);
             updateControls();
+            updateDurationDisplay();
+        });
+        audio.addEventListener("timeupdate", () => {
+            updateDurationDisplay();
         });
 
         const speedInput = document.getElementById("playback-speed");
@@ -285,7 +303,100 @@ function setupControls() {
         speed.addEventListener("change", updateSpeed);
         speed.addEventListener("input", updateSpeed);
     }
+
+    const autoScrollCheckbox = document.getElementById("auto-scroll");
+    if (autoScrollCheckbox) {
+        autoScrollEnabled = autoScrollCheckbox.checked; // sync initial
+        autoScrollCheckbox.addEventListener("change", (e) => {
+            autoScrollEnabled = e.target.checked;
+        });
+    }
 }
+
+let chunkDurations = [];
+let estimatedDuration = 0;
+let totalDuration = 0;
+
+function formatDuration(seconds) {
+    if (!seconds || seconds < 0) return "0s";
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+}
+
+function updateDurationDisplay() {
+    const metaDuration = document.getElementById("meta-duration-text");
+    if (!metaDuration) return;
+
+    let displaySeconds = 0;
+    let label = "Estimated";
+
+    // Get current speed multiplier
+    const speedInput = document.getElementById("playback-speed");
+    let speed = 1.0;
+    if (speedInput) {
+        speed = parseFloat(speedInput.value) || 1.0;
+    }
+
+    if (totalDuration > 0 && globalDone >= totalLogicalSentences) {
+        // Done: show total duration
+        // The user request: "replace the guestimate with real number once sentences are played"
+        // "add total/remaining time to read the text"
+        label = "Total";
+        displaySeconds = totalDuration;
+    } else {
+        // Still processing or not fully done: use estimate
+        // If we have some chunk durations, maybe refine estimate? 
+        // For simplicity, stick to estimated from backend until done.
+        displaySeconds = estimatedDuration;
+    }
+
+    // Adjust for speed? 
+    // "make sure that this is divided by the speed multiplier"
+    // Usually "Duration: 5m" means the audio length is 5m. 
+    // If I play at 2x, it takes 2.5m. 
+    // "remaining time to read" -> implies wall clock time for user.
+    // So yes, divide by speed.
+
+    // However, we also need "Remaining".
+    // Calculation: 
+    // Total Duration (Real or Est) - Played Duration.
+    // Played Duration = Sum of durations of fully played chunks + current chunk progress.
+
+    let playedSeconds = 0;
+    // Sum duration of chunks before currentIndex
+    const currentIdx = currentIndex !== null ? currentIndex : 0;
+
+    // If we rely on chunkDurations array populated from backend
+    for (let i = 0; i < currentIdx; i++) {
+        playedSeconds += (chunkDurations[i] || 0);
+    }
+
+    // Add current chunk progress? 
+    // If playing, we can add audio.currentTime. 
+    if (audio && !audio.paused && currentIndex !== null) {
+        playedSeconds += audio.currentTime;
+    }
+
+    let remaining = Math.max(0, displaySeconds - playedSeconds);
+
+    // Apply speed adjustment to remaining time (and total for display?)
+    // Usually "Total: 10m" is fixed property of audio. "Remaining: 5m" depends on speed.
+    // User asked: "add total/remaining time... make sure that this is divided by the speed multiplier"
+    // I will divide estimates/remaining by speed.
+
+    const adjTotal = displaySeconds / speed;
+    const adjRemaining = remaining / speed;
+
+    let text = `${label}: ${formatDuration(adjTotal)}`;
+    if (currentIndex !== null && currentIndex < totalLogicalSentences) {
+        text += ` | Remaining: ~${formatDuration(adjRemaining)}`;
+    }
+
+    metaDuration.textContent = text;
+}
+
 
 async function pollStatus() {
     if (!JOB_ID || MODE !== 'view') return;
@@ -311,9 +422,19 @@ async function pollStatus() {
         globalDone = data.done || 0;
         const pct = Math.round((data.progress || 0) * 100);
 
+        estimatedDuration = data.estimated_duration || 0;
+        totalDuration = data.total_duration || 0;
+
+        if (Array.isArray(data.chunk_durations)) {
+            chunkDurations = data.chunk_durations;
+        }
+
         // Update Top Metadata
         if (metaStatus) metaStatus.textContent = data.status;
         if (metaProgress) metaProgress.textContent = `${data.done} / ${total} (${pct}%)`;
+
+        // Duration Display update (also called on timeupdate)
+        updateDurationDisplay();
 
         // Update Sidebar
         // Find the active link
@@ -349,14 +470,6 @@ async function pollStatus() {
                 const inner = progBar.querySelector(".sidebar-progress-inner");
                 if (inner) inner.style.width = pct + "%";
                 if (data.status === 'done' || pct >= 100) {
-                    // Optionally remove or keep full? 
-                    // User said "remove bottom bar", but sidebar one logic "show ... under entry" implies persistent or during processing.
-                    // Usually progress bars disappear when done or turn green.
-                    // The requirement: "show the progress bar under the entry... and up to date status information"
-                    // Let's keep it visible if it's there, maybe fade it out or just leave it full.
-                    // Actually, if it's done, the status text says "Done".
-                    // Let's hide it if done to clean up, or keep it full green. 
-                    // I will remove it if done to look cleaner.
                     progBar.remove();
                 }
             }
@@ -381,15 +494,6 @@ async function pollStatus() {
 
         if (data.status === "done") {
             if (metaDlLink) {
-                // We need to know the download URL. 
-                // The backend status/ returns `chunk_urls` but not `full_audio_url` explicitly unless we added it.
-                // But we can trigger generation if needed. 
-                // Let's check `generate_full` endpoint.
-                // We can just set the href to a generated path if we know it, or call generate API once.
-
-                // Hack: Call generate_full once to get the link if we don't have it.
-                // Or updates status endpoint to return it.
-                // For now, let's call generate_full logic if link is empty.
                 if (metaDlLink.getAttribute('href') === "#" || metaDlLink.style.display === "none") {
                     // Trigger generation to get path
                     fetch(`/generate_full/${JOB_ID}`, { method: 'POST' })
@@ -413,6 +517,9 @@ async function pollStatus() {
 }
 
 function init() {
+    // Poll sidebar on all pages
+    pollSidebar();
+
     if (MODE !== 'view' || !JOB_ID || !FULL_TEXT) return;
 
     // sentences-container is always visible
@@ -423,14 +530,21 @@ function init() {
     // Restore played state
     if (typeof LAST_PLAYED_INDEX !== 'undefined' && LAST_PLAYED_INDEX >= 0) {
         playedUntil = LAST_PLAYED_INDEX;
+        // Resume logic: pick up at last read sentence needed
+        // Since LAST_PLAYED_INDEX is the one *played*, we start at +1
+        const nextMeta = LAST_PLAYED_INDEX + 1;
+        if (nextMeta < totalLogicalSentences) {
+            currentIndex = nextMeta;
+        } else {
+            // Finished? Reset to 0 or leave at end
+            currentIndex = 0;
+        }
     }
 
     updateSentenceStyles(totalLogicalSentences);
     setupControls();
-    updateSentenceStyles(totalLogicalSentences);
-    setupControls();
+
     pollStatus();
-    pollSidebar();
 }
 
 async function pollSidebar() {
@@ -438,38 +552,25 @@ async function pollSidebar() {
         const res = await fetch("/api/jobs/status");
         if (res.ok) {
             const data = await res.json();
-            // data.jobs is array of {id, status, progress, processed, total}
-
-            // 1. Update active jobs provided by backend
             const activeIds = new Set();
             data.jobs.forEach(job => {
                 activeIds.add(job.id);
                 updateSidebarItem(job);
             });
 
-            // 2. Ideally we might want to clean up bars for jobs that are active in UI but not in returned list (meaning they finished or failed).
-            // But the backend only returns "active" (queued, processing). 
-            // So if a job was processing and is now done, it won't be in the list.
-            // We should check all sidebar items with progress bars. If their ID is not in activeIds, remove the bar/update status?
-            // Actually, we can rely on specific "done" checks, or just let them be.
-            // If they are done, we might want to refresh simply or just remove the bar.
-
             document.querySelectorAll(".sidebar-progress-bar").forEach(bar => {
                 const link = bar.closest(".conversion-link");
                 if (link && link.id) {
                     const id = link.id.replace("conv-", "");
                     if (!activeIds.has(id)) {
-                        // Job is no longer active (completed or deleted or error)
-                        // Verify if it is actually done?
-                        // We don't have new status here.
-                        // We can just query /status/id for that specific one? Too many requests.
-                        // Or we can assume if it disappeared from /api/jobs/status, it's done (if we trust the endpoint filter).
-                        // Let's remove the bar if it's not in active list.
                         bar.remove();
-
                         // Also update status dot to done (remove it)
                         const statusText = link.querySelector(".conv-status-text");
-                        if (statusText) statusText.innerHTML = "";
+                        // If it disappeared from active list it means it's done or deleted.
+                        // Clean status text if it was processing
+                        if (statusText && statusText.textContent.toUpperCase().includes("PROCESSING")) {
+                            statusText.textContent = "";
+                        }
                         link.classList.remove("conv-item-queued", "conv-item-processing", "conv-item-converting");
                         link.classList.add("conv-item-done");
                     }
@@ -487,35 +588,127 @@ function updateSidebarItem(job) {
     const link = document.getElementById(`conv-${job.id}`);
     if (!link) return;
 
+    // Check if fully played
+    const fullyPlayed = (job.total > 0 && job.last_played_index >= job.total - 1);
+
     // Update status text
     const statusText = link.querySelector(".conv-status-text");
     if (statusText) {
-        // Only update if changed or simply overwrite
-        statusText.innerHTML = `<span class="status-indicator legend-dot ${job.status}"></span>${job.status} (${job.processed}/${job.total})`;
+        if (fullyPlayed) {
+            const durText = formatDuration(job.total_duration);
+            statusText.innerHTML = `<span class="conv-item-completed">✔ Completed</span> <span class="conv-item-duration">(${durText})</span>`;
+        } else if (job.status === 'done') {
+            // Show remaining time ONLY
+            // "right after a conversion completed... remaining time is not shown"
+            // Typically last_played_index is default -1 or some value.
+            let lastIdx = (typeof job.last_played_index !== 'undefined') ? job.last_played_index : -1;
+
+            // Chunks played count: lastIdx + 1 (since 0-based index)
+            let playedCount = lastIdx + 1;
+            let chunksLeft = Math.max(0, job.total - playedCount);
+
+            let avg = (job.total > 0 && job.total_duration > 0) ? (job.total_duration / job.total) : 0;
+            let rem = chunksLeft * avg;
+
+            // If rem is 0 (but not fully played?), maybe total duration unknown or very short?
+            if (rem < 0) rem = 0;
+
+            // If just finished, playedCount=0, chunksLeft=total, rem=total_duration. Correct.
+
+            statusText.innerHTML = `<span class="conv-item-duration">-${formatDuration(rem)}</span>`;
+        } else {
+            // Processing / Queued
+            statusText.innerHTML = `<span class="status-indicator legend-dot ${job.status}"></span>${job.status} (${job.processed}/${job.total})`;
+        }
     }
 
     // Update classes
     link.classList.remove("conv-item-queued", "conv-item-processing", "conv-item-done", "conv-item-converting");
     link.classList.add(`conv-item-${job.status}`);
 
-    // Update Progress Bar
-    let progBar = link.querySelector(".sidebar-progress-bar");
-    const pct = (job.progress * 100).toFixed(1);
-
-    if (!progBar) {
-        if (job.status !== 'done') {
-            progBar = document.createElement("div");
-            progBar.className = "sidebar-progress-bar";
-            const inner = document.createElement("div");
-            inner.className = "sidebar-progress-inner";
-            progBar.appendChild(inner);
-            link.appendChild(progBar);
-        }
+    // Recalc playPct for bars
+    let playPct = 0;
+    if (job.total > 0 && job.last_played_index >= -1) {
+        playPct = ((job.last_played_index + 1) / job.total) * 100;
+        if (playPct > 100) playPct = 100;
     }
 
-    if (progBar) {
-        const inner = progBar.querySelector(".sidebar-progress-inner");
-        if (inner) inner.style.width = pct + "%";
+    // Progress Bars
+    // Container: .sidebar-progress-bar
+    let progBar = link.querySelector(".sidebar-progress-bar");
+
+    // Conditions to show bars:
+    // Conv Bar: show if status != 'done'
+    // Play Bar: show if status == 'done' (or playable) AND playPct > 0 AND !fullyPlayed
+
+    // BUT user said: "only show the pink conversion progress bar while conversion is acitive, once converstion is complete, hide"
+    // AND "same goes for the playback bar" (hide if complete)
+    // So if BOTH are complete/hidden, remove container.
+
+    // Conv bar is ONLY for active conversion.
+    const showConv = (job.status !== 'done');
+    // Play bar is ONLY for active playback (partially played).
+    const showPlay = (!fullyPlayed && playPct > 0);
+
+    if (!showConv && !showPlay) {
+        if (progBar) progBar.remove();
+        // Return or continue? We already updated status.
+        return;
+    }
+
+    // Create container if needed
+    if (!progBar) {
+        progBar = document.createElement("div");
+        progBar.className = "sidebar-progress-bar";
+        link.appendChild(progBar);
+    }
+    progBar.style.display = 'block';
+
+    // 1. Conversion Bar (Pink)
+    let convBar = progBar.querySelector(".bar-conversion");
+    if (showConv) {
+        if (!convBar) {
+            convBar = document.createElement("div");
+            convBar.className = "bar-conversion";
+            Object.assign(convBar.style, {
+                position: "absolute",
+                top: "0",
+                left: "0",
+                height: "100%",
+                background: "linear-gradient(135deg, #a855f7, #ec4899)", // Original pink gradient
+                zIndex: "1",
+                transition: "width 0.3s ease"
+            });
+            progBar.appendChild(convBar);
+        }
+        // If status done, pct is 100, but showConv would be false. 
+        // So here status is NOT done.
+        const convPct = (job.progress * 100).toFixed(1);
+        convBar.style.width = convPct + "%";
+    } else {
+        if (convBar) convBar.remove();
+    }
+
+    // 2. Playback Bar (Gradient)
+    let playBar = progBar.querySelector(".bar-playback");
+    if (showPlay) {
+        if (!playBar) {
+            playBar = document.createElement("div");
+            playBar.className = "bar-playback";
+            Object.assign(playBar.style, {
+                position: "absolute",
+                top: "0",
+                left: "0",
+                height: "100%",
+                background: "linear-gradient(135deg, #6366f1, #22c55e)", // Blue-Green gradient
+                zIndex: "2",
+                transition: "width 0.3s ease"
+            });
+            progBar.appendChild(playBar);
+        }
+        playBar.style.width = playPct + "%";
+    } else {
+        if (playBar) playBar.remove();
     }
 }
 

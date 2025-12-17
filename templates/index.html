@@ -65,6 +65,8 @@
                         | <span><span style="color: #94a3b8;">Progress:</span> <span id="meta-progress-text">{{
                                 conversion.processed_chunks or 0 }} / {{
                                 conversion.total_chunks }}</span></span>
+                        | <span><span style="color: #94a3b8; font-weight:500;" id="meta-duration-text">Estimated:
+                                ...</span></span>
                         {% if conversion.speaker %}
                         | <span style="color: #94a3b8;">Voice:</span> {{ conversion.speaker }}
                         {% endif %}
@@ -94,6 +96,12 @@
                     <datalist id="speed-markers">
                         <option value="1.0"></option>
                     </datalist>
+
+                    <div style="margin-left: auto; display: flex; align-items: center; gap: 0.5rem;">
+                        <input type="checkbox" id="auto-scroll" checked style="width: 16px; height: 16px;">
+                        <label for="auto-scroll"
+                            style="margin:0; font-size: 0.9rem; color: #94a3b8;">Auto-scroll</label>
+                    </div>
                 </div>
 
                 <div id="sentences-container" class="output-text-box"></div>

@@ -115,8 +115,13 @@ def start_job(
 
     chunks_text = split_into_chunks(text)
     
+    # Calculate estimated duration
+    # Avg reading speed ~ 150 words per minute => 2.5 words per second
+    words = len(text.split())
+    estimated_seconds = words / 2.5
+    
     # Create DB entry
-    conversion_id = db.create_conversion(title, text, chunks_text, speaker=speaker, language=language)
+    conversion_id = db.create_conversion(title, text, chunks_text, speaker=speaker, language=language, estimated_duration=estimated_seconds)
     
     rel_job_dir = f"jobs/{conversion_id}"
     job_dir = os.path.join(static_folder, rel_job_dir)
@@ -191,9 +196,15 @@ def _process_job(job):
                     speaker=speaker,
                     language=language,
                 )
+                
+                # Calculate duration
+                # Use soundfile used in _concat_wavs or just open
+                info = sf.info(part_path)
+                duration = info.duration
+
                 # Success
                 rel_path = f"{rel_job_dir}/{filename}"
-                db.update_chunk_status(conversion_id, idx, 'done', audio_filename=rel_path)
+                db.update_chunk_status(conversion_id, idx, 'done', audio_filename=rel_path, duration=duration)
                 
             except Exception as e:
                 print(f"Error processing chunk {idx}: {e}")
