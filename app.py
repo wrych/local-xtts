@@ -7,7 +7,7 @@ from datetime import datetime
 from flask import Flask, request, render_template, jsonify, url_for, redirect
 
 from config import SPEAKERS, LANGUAGES
-from tts_service import start_job, generate_full_audio
+from tts_service import start_job, generate_full_audio, REGISTRY
 import db
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
@@ -23,6 +23,7 @@ def index():
     if request.method == "POST":
         text = request.form.get("text", "")
         title = request.form.get("title", "New Conversion")
+        provider = request.form.get("provider", "local")
         speaker = request.form.get("speaker", SPEAKERS[0])
         language = request.form.get("language", "en")
         use_cuda = request.form.get("use_cuda") == "on"
@@ -34,6 +35,7 @@ def index():
                 text=text,
                 speaker=speaker,
                 language=language,
+                provider=provider,
                 use_cuda=use_cuda,
                 static_folder=static_folder,
             )
@@ -48,7 +50,9 @@ def index():
         conversions=conversions,
         speakers=SPEAKERS,
         languages=LANGUAGES,
+        providers=REGISTRY.list_providers(),
         # Defaults
+        provider="local",
         speaker=SPEAKERS[0],
         language="en",
         use_cuda=True,
@@ -71,6 +75,7 @@ def conversion(conversion_id):
         job_id=conversion_id, # For JS compatibility
         text=data["text"],
         title=data["title"],
+        provider=data.get("provider", "local"),
         last_played_index=data["last_played_index"]
     )
 
@@ -128,7 +133,10 @@ def status(conversion_id):
         "chunk_urls": url_list,
         "chunk_durations": duration_list,
         "estimated_duration": data.get("estimated_duration", 0.0),
-        "total_duration": data.get("total_duration", 0.0)
+        "total_duration": data.get("total_duration", 0.0),
+        "provider": data.get("provider", "local"),
+        "speaker": data.get("speaker"),
+        "language": data.get("language")
         # "saved_filename": ... 
     })
 
@@ -204,10 +212,40 @@ def get_jobs_status():
             "total": total,
             "last_played_index": c.get("last_played_index", -1),
             "total_duration": c.get("total_duration", 0.0),
-            "estimated_duration": c.get("estimated_duration", 0.0)
+            "estimated_duration": c.get("estimated_duration", 0.0),
+            "provider": c.get("provider", "local")
         })
             
     return jsonify({"jobs": active_jobs})
+
+@app.route("/api/providers", methods=["GET"])
+def get_providers():
+    return jsonify({"providers": REGISTRY.list_providers()})
+
+@app.route("/api/providers/<provider_id>/voices", methods=["GET"])
+def get_provider_voices(provider_id):
+    provider = REGISTRY.get_provider(provider_id)
+    if provider:
+        language = request.args.get('language')
+        return jsonify({"voices": provider.get_voices(language=language)})
+    return jsonify({"error": "Provider not found"}), 404
+
+@app.route("/api/providers/<provider_id>/languages", methods=["GET"])
+def get_provider_languages(provider_id):
+    provider = REGISTRY.get_provider(provider_id)
+    if provider:
+        return jsonify({"languages": provider.get_languages()})
+    return jsonify({"error": "Provider not found"}), 404
+
+@app.route("/api/providers/<provider_id>/settings", methods=["GET", "POST"])
+def provider_settings(provider_id):
+    if request.method == "POST":
+        settings = request.json
+        db.save_provider_settings(provider_id, settings)
+        return jsonify({"status": "ok"})
+    else:
+        settings = db.get_provider_settings(provider_id)
+        return jsonify(settings)
 
 @app.route("/api/delete", methods=["POST"])
 def delete_conversion():

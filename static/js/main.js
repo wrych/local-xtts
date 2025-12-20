@@ -9,8 +9,220 @@ let waitingForNext = false;
 let autoScrollEnabled = true;
 let totalLogicalSentences = 0;
 
-// Config from backend
 // JOB_ID, FULL_TEXT, LAST_PLAYED_INDEX, MODE are defined in index.html
+
+async function onProviderChange() {
+    const providerId = document.getElementById('provider').value;
+    let defaultLanguage = null;
+    let defaultVoice = null;
+
+    // Fetch settings first to get defaults
+    try {
+        const sRes = await fetch(`/api/providers/${providerId}/settings`);
+        if (sRes.ok) {
+            const settings = await sRes.json();
+            defaultLanguage = settings.default_language;
+            defaultVoice = settings.default_voice;
+        }
+    } catch (e) { console.error("Error fetching settings", e); }
+
+    // 1. Fetch languages for the new provider
+    try {
+        const lRes = await fetch(`/api/providers/${providerId}/languages`);
+        if (lRes.ok) {
+            const lData = await lRes.json();
+            const langSelect = document.getElementById('language');
+            langSelect.innerHTML = '';
+            lData.languages.forEach(lang => {
+                const opt = document.createElement('option');
+                opt.value = lang;
+                opt.textContent = lang;
+                langSelect.appendChild(opt);
+            });
+
+            if (defaultLanguage && lData.languages.includes(defaultLanguage)) {
+                langSelect.value = defaultLanguage;
+            }
+        }
+    } catch (e) { console.error("Error fetching languages", e); }
+
+    // 2. Automatically trigger voice fetch
+    onLanguageChange(defaultVoice);
+}
+
+async function onLanguageChange(preferredVoice = null) {
+    const providerId = document.getElementById('provider').value;
+    const language = document.getElementById('language').value;
+    const speakerSelect = document.getElementById('speaker');
+    const speakerHint = document.getElementById('speaker-hint');
+
+    if (!language) {
+        speakerSelect.innerHTML = '<option value="">Select language first</option>';
+        return;
+    }
+
+    speakerHint.textContent = "Loading voices...";
+
+    try {
+        const vRes = await fetch(`/api/providers/${providerId}/voices?language=${language}`);
+        if (vRes.ok) {
+            const vData = await vRes.json();
+            speakerSelect.innerHTML = '';
+            vData.voices.forEach(voice => {
+                const opt = document.createElement('option');
+                opt.value = voice;
+                opt.textContent = voice;
+                speakerSelect.appendChild(opt);
+            });
+            speakerHint.textContent = `Choose one of the ${vData.voices.length} voices available for ${language}.`;
+
+            if (preferredVoice && vData.voices.includes(preferredVoice)) {
+                speakerSelect.value = preferredVoice;
+            }
+        }
+    } catch (e) {
+        console.error("Error fetching voices", e);
+        speakerHint.textContent = "Error loading voices.";
+    }
+}
+
+async function saveAsDefault(type) {
+    const providerId = document.getElementById('provider').value;
+    const val = document.getElementById(type === 'language' ? 'language' : 'speaker').value;
+    if (!val) return;
+
+    try {
+        // First get existing settings
+        const res = await fetch(`/api/providers/${providerId}/settings`);
+        let settings = {};
+        if (res.ok) {
+            settings = await res.json();
+        }
+
+        if (type === 'language') {
+            settings.default_language = val;
+        } else {
+            settings.default_voice = val;
+        }
+
+        const saveRes = await fetch(`/api/providers/${providerId}/settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(settings)
+        });
+
+        if (saveRes.ok) {
+            alert(`Saved ${val} as default ${type} for ${providerId}`);
+        } else {
+            alert("Error saving default");
+        }
+    } catch (e) {
+        console.error("Error saving default", e);
+        alert("Error saving default");
+    }
+}
+
+
+function openSettings() {
+    document.getElementById('settings-modal').style.display = 'block';
+    loadProviderSettings();
+}
+
+function closeSettings() {
+    document.getElementById('settings-modal').style.display = 'none';
+}
+
+async function loadProviderSettings() {
+    const providerId = document.getElementById('settings-provider-select').value;
+    const fieldsDiv = document.getElementById('settings-fields');
+    const defaultLangSelect = document.getElementById('settings-default-language');
+    const defaultVoiceSelect = document.getElementById('settings-default-voice');
+
+    fieldsDiv.innerHTML = '<p style="color: #94a3b8;">Loading settings...</p>';
+    defaultLangSelect.innerHTML = '<option>Loading...</option>';
+    defaultVoiceSelect.innerHTML = '<option>Loading...</option>';
+
+    try {
+        // Fetch languages and voices to populate dropdowns
+        const lRes = await fetch(`/api/providers/${providerId}/languages`);
+        const lData = lRes.ok ? await lRes.json() : { languages: [] };
+
+        defaultLangSelect.innerHTML = '<option value="">(None)</option>';
+        lData.languages.forEach(lang => {
+            const opt = document.createElement('option');
+            opt.value = lang;
+            opt.textContent = lang;
+            defaultLangSelect.appendChild(opt);
+        });
+
+        const vRes = await fetch(`/api/providers/${providerId}/voices`);
+        const vData = vRes.ok ? await vRes.json() : { voices: [] };
+
+        defaultVoiceSelect.innerHTML = '<option value="">(None)</option>';
+        vData.voices.forEach(voice => {
+            const opt = document.createElement('option');
+            opt.value = voice;
+            opt.textContent = voice;
+            defaultVoiceSelect.appendChild(opt);
+        });
+
+        const res = await fetch(`/api/providers/${providerId}/settings`);
+        if (res.ok) {
+            const settings = await res.json();
+            fieldsDiv.innerHTML = '';
+
+            if (providerId === 'google') {
+                fieldsDiv.innerHTML = `
+                    <div class="form-group">
+                        <label for="google_service_account">Google Cloud Service Account JSON</label>
+                        <textarea id="google_service_account" rows="10" placeholder='Paste your Service Account JSON here...' style="width: 100%; box-sizing: border-box; font-family: monospace;">${settings.google_service_account || ''}</textarea>
+                        <div class="small-hint">You can create a service account and download the JSON key from the Google Cloud Console.</div>
+                    </div>
+                `;
+            } else if (providerId === 'local') {
+                fieldsDiv.innerHTML = `<p style="color: #94a3b8;">No specific settings for local provider.</p>`;
+            } else {
+                fieldsDiv.innerHTML = `<p style="color: #94a3b8;">No configuration fields defined for this provider yet.</p>`;
+            }
+
+            // Populate defaults
+            if (settings.default_language) defaultLangSelect.value = settings.default_language;
+            if (settings.default_voice) defaultVoiceSelect.value = settings.default_voice;
+        }
+    } catch (e) {
+        console.error("Error loading settings", e);
+        fieldsDiv.innerHTML = '<p style="color: #ef4444;">Error loading settings.</p>';
+    }
+}
+
+
+async function saveSettings() {
+    const providerId = document.getElementById('settings-provider-select').value;
+    const settings = {};
+
+    if (providerId === 'google') {
+        const field = document.getElementById('google_service_account');
+        if (field) settings.google_service_account = field.value;
+    }
+
+    settings.default_language = document.getElementById('settings-default-language').value;
+    settings.default_voice = document.getElementById('settings-default-voice').value;
+
+
+    try {
+        const res = await fetch(`/api/providers/${providerId}/settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(settings)
+        });
+        if (res.ok) {
+            alert("Settings saved successfully.");
+            closeSettings();
+        } else {
+            alert("Error saving settings.");
+        }
+    } catch (e) { console.error("Error saving settings", e); }
+}
 
 const PARAGRAPH_DELIMITER = "||PARAGRAPH_BREAK||";
 
@@ -123,7 +335,7 @@ function updateSentenceStyles(total) {
 
             // Smooth scroll to that position
             container.scrollTo({
-                top: targetTop,
+                top: Math.max(0, targetTop),
                 behavior: "smooth"
             });
         }
@@ -241,27 +453,42 @@ async function generateDownload() {
 
 function updateControls() {
     const btn = document.getElementById("btn-play-pause");
+    const prevBtn = document.getElementById("btn-prev");
+    const nextBtn = document.getElementById("btn-next");
     if (!btn) return;
 
     // enable play/pause if we have sentences to play (even if not ready yet, for buffering)
     const canPlay = totalLogicalSentences > 0;
     btn.disabled = !canPlay;
 
+    // Navigation buttons
+    if (prevBtn) prevBtn.disabled = !canPlay || (currentIndex || 0) <= 0;
+    if (nextBtn) nextBtn.disabled = !canPlay || (currentIndex != null && currentIndex >= totalLogicalSentences - 1);
+
+    const svgPlay = document.getElementById("svg-play");
+    const svgPause = document.getElementById("svg-pause");
+
     if (waitingForNext) {
-        btn.textContent = "Buffering";
         btn.classList.add("buffering");
+        if (svgPlay) svgPlay.style.display = "block";
+        if (svgPause) svgPause.style.display = "none";
     } else if (audio && !audio.paused) {
-        btn.textContent = "Pause";
         btn.classList.remove("buffering");
+        if (svgPlay) svgPlay.style.display = "none";
+        if (svgPause) svgPause.style.display = "block";
     } else {
-        btn.textContent = "Play";
         btn.classList.remove("buffering");
+        if (svgPlay) svgPlay.style.display = "block";
+        if (svgPause) svgPause.style.display = "none";
     }
 }
 
 function setupControls() {
     const btn = document.getElementById("btn-play-pause");
+    const prevBtn = document.getElementById("btn-prev");
+    const nextBtn = document.getElementById("btn-next");
     const speed = document.getElementById("playback-speed");
+    const seekBar = document.getElementById("global-seek-bar");
 
     if (btn) {
         btn.addEventListener("click", () => {
@@ -272,18 +499,32 @@ function setupControls() {
             }
 
             // Start playing
-
-            // if nothing selected, start from current index or 0
             if (currentIndex == null) currentIndex = 0;
-            // if we finished, restart
             if (currentIndex >= totalLogicalSentences) currentIndex = 0;
 
             if (sentenceAudioUrls[currentIndex]) {
                 playFromIndex(currentIndex);
             } else {
-                // Buffer
                 waitingForNext = true;
                 updateControls();
+            }
+        });
+    }
+
+    if (prevBtn) {
+        prevBtn.addEventListener("click", () => {
+            const idx = (currentIndex || 0);
+            if (idx > 0) {
+                onSentenceClick(idx - 1);
+            }
+        });
+    }
+
+    if (nextBtn) {
+        nextBtn.addEventListener("click", () => {
+            const idx = currentIndex != null ? currentIndex : -1;
+            if (idx < totalLogicalSentences - 1) {
+                onSentenceClick(idx + 1);
             }
         });
     }
@@ -298,10 +539,19 @@ function setupControls() {
             if (valDisplay) {
                 valDisplay.textContent = val.toFixed(1);
             }
+            updateDurationDisplay(); // update remaining/total estimates
         };
 
         speed.addEventListener("change", updateSpeed);
         speed.addEventListener("input", updateSpeed);
+    }
+
+    if (seekBar) {
+        seekBar.addEventListener("input", (e) => {
+            // Manual seek logic
+            const targetTime = parseFloat(e.target.value);
+            seekToTime(targetTime);
+        });
     }
 
     const autoScrollCheckbox = document.getElementById("auto-scroll");
@@ -310,6 +560,38 @@ function setupControls() {
         autoScrollCheckbox.addEventListener("change", (e) => {
             autoScrollEnabled = e.target.checked;
         });
+    }
+
+    setupSeekBarInteractions();
+}
+
+function seekToTime(targetSeconds) {
+    const seekBar = document.getElementById("global-seek-bar");
+    const displaySecs = parseFloat(seekBar?.max || 0);
+
+    let sum = 0;
+    for (let i = 0; i < totalLogicalSentences; i++) {
+        const d = getChunkDuration(i, displaySecs);
+        if (sum + d > targetSeconds) {
+            // This is the sentence we want
+            const offsetInSentence = targetSeconds - sum;
+
+            // If it's the current sentence, just seek. 
+            // If not, click it, then seek when it starts.
+            if (currentIndex === i && audio) {
+                audio.currentTime = offsetInSentence;
+                updateDurationDisplay();
+            } else {
+                // If not ready, we just jump to the sentence for now.
+                // Within-sentence accurate seeking across sentence boundaries 
+                // requires the audio to be loaded (playFromIndex).
+                onSentenceClick(i);
+                // We'd need a one-time "onplay" seek to be truly accurate, 
+                // but jump-to-sentence is a good start.
+            }
+            return;
+        }
+        sum += d;
     }
 }
 
@@ -325,12 +607,34 @@ function formatDuration(seconds) {
     return `${s}s`;
 }
 
-function updateDurationDisplay() {
-    const metaDuration = document.getElementById("meta-duration-text");
-    if (!metaDuration) return;
+/**
+ * Get accurate or estimated duration for a chunk.
+ */
+function getChunkDuration(i, totalTime) {
+    if (chunkDurations[i] && chunkDurations[i] > 0) return chunkDurations[i];
 
-    let displaySeconds = 0;
-    let label = "Estimated";
+    const activeSentences = sentences.filter(s => s !== PARAGRAPH_DELIMITER);
+    const count = activeSentences.length;
+    if (count === 0) return 0;
+
+    // Use character counts for a better proportional estimate than equal split
+    const charCounts = activeSentences.map(s => s.length);
+    const totalChars = charCounts.reduce((a, b) => a + b, 0);
+
+    if (totalChars > 0 && totalTime > 0) {
+        return (charCounts[i] / totalChars) * totalTime;
+    }
+    return totalTime / count;
+}
+
+function updateDurationDisplay() {
+    const playerCurrent = document.getElementById("player-time-current");
+    const playerTotal = document.getElementById("player-time-total");
+    const playerRemaining = document.getElementById("player-time-remaining");
+    const seekBar = document.getElementById("global-seek-bar");
+    if (!playerCurrent || !playerTotal) return;
+
+    let displaySeconds = (totalDuration > 0 && globalDone >= totalLogicalSentences) ? totalDuration : estimatedDuration;
 
     // Get current speed multiplier
     const speedInput = document.getElementById("playback-speed");
@@ -339,62 +643,155 @@ function updateDurationDisplay() {
         speed = parseFloat(speedInput.value) || 1.0;
     }
 
-    if (totalDuration > 0 && globalDone >= totalLogicalSentences) {
-        // Done: show total duration
-        // The user request: "replace the guestimate with real number once sentences are played"
-        // "add total/remaining time to read the text"
-        label = "Total";
-        displaySeconds = totalDuration;
-    } else {
-        // Still processing or not fully done: use estimate
-        // If we have some chunk durations, maybe refine estimate? 
-        // For simplicity, stick to estimated from backend until done.
-        displaySeconds = estimatedDuration;
-    }
-
-    // Adjust for speed? 
-    // "make sure that this is divided by the speed multiplier"
-    // Usually "Duration: 5m" means the audio length is 5m. 
-    // If I play at 2x, it takes 2.5m. 
-    // "remaining time to read" -> implies wall clock time for user.
-    // So yes, divide by speed.
-
-    // However, we also need "Remaining".
-    // Calculation: 
-    // Total Duration (Real or Est) - Played Duration.
-    // Played Duration = Sum of durations of fully played chunks + current chunk progress.
-
     let playedSeconds = 0;
-    // Sum duration of chunks before currentIndex
     const currentIdx = currentIndex !== null ? currentIndex : 0;
 
-    // If we rely on chunkDurations array populated from backend
     for (let i = 0; i < currentIdx; i++) {
-        playedSeconds += (chunkDurations[i] || 0);
+        playedSeconds += getChunkDuration(i, displaySeconds);
     }
 
-    // Add current chunk progress? 
-    // If playing, we can add audio.currentTime. 
-    if (audio && !audio.paused && currentIndex !== null) {
+    if (audio && currentIndex !== null) {
         playedSeconds += audio.currentTime;
     }
 
-    let remaining = Math.max(0, displaySeconds - playedSeconds);
+    // Update labels (adjusted for speed)
+    playerTotal.textContent = formatDuration(displaySeconds / speed);
+    playerCurrent.textContent = formatDuration(playedSeconds / speed);
 
-    // Apply speed adjustment to remaining time (and total for display?)
-    // Usually "Total: 10m" is fixed property of audio. "Remaining: 5m" depends on speed.
-    // User asked: "add total/remaining time... make sure that this is divided by the speed multiplier"
-    // I will divide estimates/remaining by speed.
-
-    const adjTotal = displaySeconds / speed;
-    const adjRemaining = remaining / speed;
-
-    let text = `${label}: ${formatDuration(adjTotal)}`;
-    if (currentIndex !== null && currentIndex < totalLogicalSentences) {
-        text += ` | Remaining: ~${formatDuration(adjRemaining)}`;
+    if (playerRemaining) {
+        const remaining = Math.max(0, displaySeconds - playedSeconds);
+        playerRemaining.textContent = `-${formatDuration(remaining / speed)}`;
     }
 
-    metaDuration.textContent = text;
+    // Update seek bar (raw seconds for max and value)
+    if (seekBar) {
+        seekBar.max = displaySeconds;
+        seekBar.value = playedSeconds;
+    }
+
+    // Update Segment Styles
+    updateSegmentStyles();
+}
+
+function renderSegments() {
+    const container = document.getElementById("segments-container");
+    const seekBar = document.getElementById("global-seek-bar");
+    if (!container || !seekBar) return;
+
+    // Only sentences, no paragraph delimiters
+    const activeSentences = sentences.filter(s => s !== PARAGRAPH_DELIMITER);
+    const count = activeSentences.length;
+    if (count === 0) return;
+
+    const displaySecs = parseFloat(seekBar.max || 0);
+
+    container.innerHTML = "";
+
+    activeSentences.forEach((s, i) => {
+        const seg = document.createElement("div");
+        seg.className = "segment pending";
+        seg.dataset.index = i;
+
+        // Calculate proportional weights based on durations if available, 
+        // otherwise use the same equal-split fallback as the hover logic.
+        const dur = getChunkDuration(i, displaySecs);
+        const widthPct = (displaySecs > 0) ? (dur / displaySecs) * 100 : (100 / count);
+
+        seg.style.width = `calc(${widthPct}% - 2px)`;
+        container.appendChild(seg);
+    });
+}
+
+/**
+ * Setup hover and mouse interaction for the seek bar once.
+ */
+function setupSeekBarInteractions() {
+    const seekBar = document.getElementById("global-seek-bar");
+    const previewArea = document.getElementById("seek-preview-area");
+    const container = document.getElementById("segments-container");
+
+    if (!seekBar || !previewArea || !container) return;
+
+    // Remove existing if any (to be safe if called multiple times, though setupControls should call once)
+    const onMouseMove = (e) => {
+        const activeSentences = sentences.filter(s => s !== PARAGRAPH_DELIMITER);
+        if (activeSentences.length === 0) return;
+
+        const rect = seekBar.getBoundingClientRect();
+        const pct = (e.clientX - rect.left) / rect.width;
+        const displaySecs = parseFloat(seekBar.max || 0);
+        const targetTime = pct * displaySecs;
+
+        // Find which sentence this is
+        let sum = 0;
+        let foundIdx = -1;
+
+        for (let i = 0; i < activeSentences.length; i++) {
+            const dur = getChunkDuration(i, displaySecs);
+            if (sum + dur > targetTime) {
+                foundIdx = i;
+                break;
+            }
+            sum += dur;
+        }
+
+        const segs = container.querySelectorAll(".segment");
+        if (foundIdx !== -1) {
+            const text = activeSentences[foundIdx];
+            previewArea.textContent = text.trim();
+            previewArea.classList.add("visible");
+
+            // Update segment hover highlighting
+            segs.forEach((seg, sIdx) => {
+                seg.classList.toggle("hover-manual", sIdx === foundIdx);
+            });
+        } else {
+            segs.forEach(seg => seg.classList.remove("hover-manual"));
+        }
+    };
+
+    const onMouseLeave = () => {
+        previewArea.classList.remove("visible");
+        const segs = container.querySelectorAll(".segment");
+        segs.forEach(seg => seg.classList.remove("hover-manual"));
+    };
+
+    seekBar.addEventListener("mousemove", onMouseMove);
+    seekBar.addEventListener("mouseleave", onMouseLeave);
+}
+
+function updateSegmentStyles() {
+    const container = document.getElementById("segments-container");
+    if (!container) return;
+
+    const segs = container.querySelectorAll(".segment");
+    segs.forEach(el => {
+        const idx = parseInt(el.dataset.index, 10);
+        el.classList.remove("pending", "converting", "ready", "playing", "played");
+
+        // Use same logic as sentence styles
+        if (audio && currentIndex === idx && !audio.paused) {
+            el.classList.add("playing");
+            return;
+        }
+
+        if (idx <= playedUntil) {
+            el.classList.add("played");
+            return;
+        }
+
+        if (sentenceAudioUrls[idx]) {
+            el.classList.add("ready");
+            return;
+        }
+
+        if (idx === globalDone && idx < totalLogicalSentences) {
+            el.classList.add("converting");
+            return;
+        }
+
+        el.classList.add("pending");
+    });
 }
 
 
@@ -432,9 +829,24 @@ async function pollStatus() {
         // Update Top Metadata
         if (metaStatus) metaStatus.textContent = data.status;
         if (metaProgress) metaProgress.textContent = `${data.done} / ${total} (${pct}%)`;
+        const metaProvider = document.getElementById("meta-provider-text");
+        if (metaProvider) metaProvider.textContent = data.provider;
 
         // Duration Display update (also called on timeupdate)
         updateDurationDisplay();
+
+        // Always attempt to render segments if they aren't there or if durations updated
+        const container = document.getElementById("segments-container");
+        if (container) {
+            const activeSentences = sentences.filter(s => s !== PARAGRAPH_DELIMITER);
+            // Re-render if count mismatch or state is active or if we just finished
+            if (container.children.length !== activeSentences.length ||
+                data.status === 'converting' ||
+                data.status === 'processing' ||
+                data.status === 'done') {
+                renderSegments();
+            }
+        }
 
         // Update Sidebar
         // Find the active link
@@ -526,6 +938,7 @@ function init() {
     sentences = splitSentences(FULL_TEXT);
     totalLogicalSentences = sentences.filter(s => s !== PARAGRAPH_DELIMITER).length;
     renderSentences();
+    renderSegments();
 
     // Restore played state
     if (typeof LAST_PLAYED_INDEX !== 'undefined' && LAST_PLAYED_INDEX >= 0) {

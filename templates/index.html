@@ -20,6 +20,7 @@
                 style="font-size: 0.85rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em;">History</strong>
         </div>
         <a href="{{ url_for('index') }}" class="new-conv-btn">+ New Conversion</a>
+        <button type="button" class="settings-btn" onclick="openSettings()">⚙ Settings</button>
 
         <ul class="conversion-list">
             {% for conv in conversions %}
@@ -65,14 +66,14 @@
                         | <span><span style="color: #94a3b8;">Progress:</span> <span id="meta-progress-text">{{
                                 conversion.processed_chunks or 0 }} / {{
                                 conversion.total_chunks }}</span></span>
-                        | <span><span style="color: #94a3b8; font-weight:500;" id="meta-duration-text">Estimated:
-                                ...</span></span>
                         {% if conversion.speaker %}
                         | <span style="color: #94a3b8;">Voice:</span> {{ conversion.speaker }}
                         {% endif %}
                         {% if conversion.language %}
                         | <span style="color: #94a3b8;">Lang:</span> {{ conversion.language }}
                         {% endif %}
+                        | <span style="color: #94a3b8;">Provider:</span> <span id="meta-provider-text">{{ provider
+                            }}</span>
 
                         <a id="meta-download-link" href="#" download
                             style="display:none; margin-left: auto; color: #2869b8; text-decoration: none; font-weight: 500;">
@@ -85,22 +86,67 @@
                     </div>
                 </div>
 
-                <div class="player-controls-bar" style="margin-bottom: 0.25rem; display: flex; align-items: center;">
-                    <button id="btn-play-pause" type="button" class="ctrl-btn" disabled>Play</button>
+                <div class="modern-player">
 
-                    <label for="playback-speed" style="margin-left: 1.5rem; margin-right: 0.5rem;">
-                        Speed (<span id="speed-val">1.0</span>)
-                    </label>
-                    <input type="range" id="playback-speed" min="0.5" max="3.0" step="0.1" value="1.0"
-                        list="speed-markers" style="width: 120px;">
-                    <datalist id="speed-markers">
-                        <option value="1.0"></option>
-                    </datalist>
+                    <div class="player-controls-row">
+                        <div class="row-left">
+                            <div class="toggle-wrap">
+                                <label class="switch">
+                                    <input type="checkbox" id="auto-scroll" checked>
+                                    <span class="slider-round"></span>
+                                </label>
+                                <span class="toggle-label">Auto-scroll</span>
+                            </div>
+                        </div>
 
-                    <div style="margin-left: auto; display: flex; align-items: center; gap: 0.5rem;">
-                        <input type="checkbox" id="auto-scroll" checked style="width: 16px; height: 16px;">
-                        <label for="auto-scroll"
-                            style="margin:0; font-size: 0.9rem; color: #94a3b8;">Auto-scroll</label>
+                        <div class="row-center">
+                            <div class="player-main-controls">
+                                <button id="btn-prev" type="button" class="player-nav-btn" title="Previous Sentence"
+                                    disabled>
+                                    <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+                                        <path d="M6 6h2v12H6zm3.5 6 8.5 6V6z" />
+                                    </svg>
+                                </button>
+                                <button id="btn-play-pause" type="button" class="player-play-btn" disabled>
+                                    <svg id="svg-play" viewBox="0 0 24 24" width="32" height="32" fill="currentColor">
+                                        <path d="M8 5v14l11-7z" />
+                                    </svg>
+                                    <svg id="svg-pause" viewBox="0 0 24 24" width="32" height="32" fill="currentColor"
+                                        style="display:none;">
+                                        <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                                    </svg>
+                                </button>
+                                <button id="btn-next" type="button" class="player-nav-btn" title="Next Sentence"
+                                    disabled>
+                                    <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+                                        <path d="m6 18 8.5-6L6 6v12zM16 6v12h2V6h-2z" />
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="row-right">
+                            <div class="speed-control">
+                                <span class="speed-limit">0.5x</span>
+                                <input type="range" id="playback-speed" min="0.5" max="3.0" step="0.1" value="1.0">
+                                <span class="speed-limit">3.0x</span>
+                                <div class="speed-badge"><span id="speed-val">1.0</span>x</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="player-progress-area">
+                        <div id="seek-preview-area" class="seek-preview-area"></div>
+                        <div class="progress-container-relative">
+                            <div id="segments-container" class="segments-container"></div>
+                            <input type="range" id="global-seek-bar" min="0" max="100" value="0" step="0.1">
+                        </div>
+                        <div class="player-time-row">
+                            <span>
+                                <span id="player-time-current" title="Current time">0s</span> / <span
+                                    id="player-time-total" title="Total content duration">0s</span>
+                            </span>
+                            <span id="player-time-remaining" style="color: #94a3b8; font-weight: 400;"></span>
+                        </div>
                     </div>
                 </div>
 
@@ -123,23 +169,64 @@
 
                 <div class="row">
                     <div class="col">
-                        <label for="speaker">Voice</label>
-                        <select id="speaker" name="speaker">
-                            {% for spk in speakers %}
-                            <option value="{{ spk }}" {% if spk==speaker %}selected{% endif %}>{{ spk }}</option>
+                        <label for="provider">Provider</label>
+                        <select id="provider" name="provider" onchange="onProviderChange()">
+                            {% for prov in providers %}
+                            <option value="{{ prov.id }}" {% if prov.id==provider %}selected{% endif %}>{{ prov.name }}
+                            </option>
                             {% endfor %}
                         </select>
-                        <div class="small-hint">Choose one of the pre-defined XTTS speakers.</div>
+                        <div class="small-hint">Select the TTS engine to use.</div>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <div class="col">
+                        <div class="label-row">
+                            <label for="language">Language</label>
+                        </div>
+                        <div class="row">
+                            <div class="col">
+                                <select id="language" name="language" onchange="onLanguageChange()">
+                                    {% for lang in languages %}
+                                    <option value="{{ lang }}" {% if lang==language %}selected{% endif %}>{{ lang }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                                <div class="small-hint">Controls pronunciation & prosody.</div>
+                            </div>
+                            <div class="min-col">
+                                <button type="button" class="save-default-btn" onclick="saveAsDefault('language')"
+                                    title="Save as default language for this provider">
+                                    💾
+                                </button>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="col">
-                        <label for="language">Language</label>
-                        <select id="language" name="language">
-                            {% for lang in languages %}
-                            <option value="{{ lang }}" {% if lang==language %}selected{% endif %}>{{ lang }}</option>
-                            {% endfor %}
-                        </select>
-                        <div class="small-hint">Controls pronunciation & prosody for the generated audio.</div>
+                        <div class="label-row">
+                            <label for="speaker">Voice</label>
+                        </div>
+                        <div class="row">
+                            <div class="col">
+                                <select id="speaker" name="speaker">
+                                    {% for spk in speakers %}
+                                    <option value="{{ spk }}" {% if spk==speaker %}selected{% endif %}>{{ spk }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                                <div class="small-hint" id="speaker-hint">Choose one of the voices available for the
+                                    selected
+                                    language.</div>
+                            </div>
+                            <div class="min-col">
+                                <button type="button" class="save-default-btn" onclick="saveAsDefault('voice')"
+                                    title="Save as default voice for this provider">
+                                    💾
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -156,6 +243,36 @@
 
 
             <div id="result" class="result" style="display:none;"></div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeSettings()">&times;</span>
+            <h2 style="margin-top: 0;">Provider Settings</h2>
+            <div class="form-group">
+                <label for="settings-provider-select">Select Provider to Configure</label>
+                <select id="settings-provider-select" onchange="loadProviderSettings()">
+                    {% for prov in providers %}
+                    <option value="{{ prov.id }}">{{ prov.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div id="settings-fields">
+                <!-- Dynamic fields based on provider -->
+            </div>
+            <hr style="border: 0; border-top: 1px solid #334155; margin: 1.5rem 0;">
+            <h3 style="font-size: 1rem; margin-bottom: 1rem;">Default Selection</h3>
+            <div class="form-group">
+                <label for="settings-default-language">Default Language</label>
+                <select id="settings-default-language"></select>
+            </div>
+            <div class="form-group">
+                <label for="settings-default-voice">Default Voice</label>
+                <select id="settings-default-voice"></select>
+            </div>
+            <button type="button" onclick="saveSettings()">Save Settings</button>
         </div>
     </div>
 

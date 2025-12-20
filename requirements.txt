@@ -3,3 +3,4 @@ TTS
 numpy
 soundfile
 librosa
+google-cloud-texttospeech

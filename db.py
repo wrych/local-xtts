@@ -30,6 +30,7 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 speaker TEXT,
                 language TEXT,
+                provider TEXT DEFAULT 'local',
                 estimated_duration REAL DEFAULT 0.0,
                 total_duration REAL DEFAULT 0.0
             )
@@ -56,6 +57,19 @@ def init_db():
         except sqlite3.OperationalError:
             pass 
 
+        try:
+            c.execute("ALTER TABLE conversions ADD COLUMN provider TEXT DEFAULT 'local'")
+        except sqlite3.OperationalError:
+            pass 
+
+        # Provider Settings table
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS provider_settings (
+                provider_id TEXT PRIMARY KEY,
+                settings_json TEXT NOT NULL
+            )
+        """)
+
         # Chunks table
         c.execute("""
             CREATE TABLE IF NOT EXISTS chunks (
@@ -78,7 +92,7 @@ def init_db():
         conn.commit()
         conn.close()
 
-def create_conversion(title: str, text: str, chunks_data: list[str], speaker: str = None, language: str = None, estimated_duration: float = 0.0) -> str:
+def create_conversion(title: str, text: str, chunks_data: list[str], speaker: str = None, language: str = None, provider: str = 'local', estimated_duration: float = 0.0) -> str:
     """
     Creates a new conversion and its chunks transactionally.
     chunks_data is a listing of text strings.
@@ -92,9 +106,9 @@ def create_conversion(title: str, text: str, chunks_data: list[str], speaker: st
         try:
             # 1. Insert Conversion
             conn.execute("""
-                INSERT INTO conversions (id, title, text, status, total_chunks, processed_chunks, speaker, language, estimated_duration)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (conversion_id, title, text, 'queued', total_chunks, 0, speaker, language, estimated_duration))
+                INSERT INTO conversions (id, title, text, status, total_chunks, processed_chunks, speaker, language, provider, estimated_duration)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (conversion_id, title, text, 'queued', total_chunks, 0, speaker, language, provider, estimated_duration))
             
             # 2. Insert Chunks
             chunk_rows = []
@@ -219,3 +233,24 @@ def delete_conversion(conversion_id: str):
             conn.commit()
         finally:
             conn.close()
+
+def get_provider_settings(provider_id: str) -> dict:
+    with DB_LOCK:
+        conn = get_connection()
+        row = conn.execute("SELECT settings_json FROM provider_settings WHERE provider_id = ?", (provider_id,)).fetchone()
+        conn.close()
+        if row:
+            return json.loads(row['settings_json'])
+        return {}
+
+def save_provider_settings(provider_id: str, settings: dict):
+    settings_json = json.dumps(settings)
+    with DB_LOCK:
+        conn = get_connection()
+        conn.execute("""
+            INSERT INTO provider_settings (provider_id, settings_json)
+            VALUES (?, ?)
+            ON CONFLICT(provider_id) DO UPDATE SET settings_json = excluded.settings_json
+        """, (provider_id, settings_json))
+        conn.commit()
+        conn.close()
