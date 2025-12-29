@@ -41,7 +41,7 @@ def index():
             )
             return redirect(url_for("conversion", conversion_id=conversion_id))
         else:
-            return render_template("index.html", error="Text is empty", conversions=conversions, speakers=SPEAKERS, languages=LANGUAGES)
+            return render_template("index.html", mode="new", error="Text is empty", conversions=conversions, speakers=SPEAKERS, languages=LANGUAGES, providers=REGISTRY.list_providers())
 
     # Show "New Conversion" page
     return render_template(
@@ -76,7 +76,8 @@ def conversion(conversion_id):
         text=data["text"],
         title=data["title"],
         provider=data.get("provider", "local"),
-        last_played_index=data["last_played_index"]
+        last_played_index=data["last_played_index"],
+        providers=REGISTRY.list_providers()
     )
 
 @app.route("/status/<conversion_id>", methods=["GET"])
@@ -245,6 +246,16 @@ def provider_settings(provider_id):
         return jsonify({"status": "ok"})
     else:
         settings = db.get_provider_settings(provider_id)
+        return jsonify(settings)
+
+@app.route("/api/settings/general", methods=["GET", "POST"])
+def general_settings():
+    if request.method == "POST":
+        settings = request.json
+        db.save_provider_settings("general", settings)
+        return jsonify({"status": "ok"})
+    else:
+        settings = db.get_provider_settings("general")
         return jsonify(settings)
 
 @app.route("/api/delete", methods=["POST"])

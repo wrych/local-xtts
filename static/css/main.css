@@ -437,7 +437,6 @@ button.buffering {
     right: 0;
     height: 8px;
     display: flex;
-    gap: 2px;
     pointer-events: none;
     /* z-index: 1; */
 }
@@ -448,19 +447,17 @@ button.buffering {
     border-radius: 1px;
     transition: all 0.3s ease;
     flex-shrink: 0;
-    border: 1px solid transparent;
     opacity: 0.5;
 }
 
 .segment.hover-manual {
-    border: 1px solid #e2e8f0;
+    box-shadow: 0 0 0 1px #e2e8f0;
     opacity: 1;
 }
 
 /* Status Gradients for Segments */
 .segment.pending {
-    background: #1e293b;
-    border: 1px solid #334155;
+    background: linear-gradient(135deg, #a855f7, #ec4899);
 }
 
 .segment.ready {
@@ -471,36 +468,13 @@ button.buffering {
     background: #1c222b;
 }
 
-/* Legend dots */
-.legend-dot,
-.status-indicator {
-    display: none;
-}
-
-.legend-dot.converting {
-    background: #fbbf24;
-}
-
-.legend-dot.ready {
-    background: #3b82f6;
-}
-
-.legend-dot.playing {
-    background: #60a5fa;
-    box-shadow: 0 0 4px #60a5fa;
-}
-
-.legend-dot.done {
-    background: #e2e8f0;
-}
-
 .segment.playing {
     background: linear-gradient(90deg, #6366f1, #22c55e);
 }
 
 .segment.converting {
     background: linear-gradient(135deg, #a855f7, #ec4899);
-    animation: pulse-pink 2s infinite;
+    animation: pulse-pink 4s infinite;
 }
 
 .player-progress-area input[type="range"] {
@@ -1094,4 +1068,25 @@ input[type=range]::-moz-range-thumb {
     color: #f1f5f9;
 }
 
-```
+/* Settings Tabs */
+.tab-btn {
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    padding: 10px 20px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.95rem;
+    transition: all 0.2s;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+}
+
+.tab-btn:hover {
+    color: #f1f5f9;
+}
+
+.tab-btn.active {
+    color: #3b82f6;
+    border-bottom: 2px solid #3b82f6;
+}

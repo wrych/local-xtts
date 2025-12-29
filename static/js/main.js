@@ -8,6 +8,8 @@ let playedUntil = -1;    // highest index fully played
 let waitingForNext = false;
 let autoScrollEnabled = true;
 let totalLogicalSentences = 0;
+let lastRenderedDone = -1;
+let lastRenderedStatus = null;
 
 // JOB_ID, FULL_TEXT, LAST_PLAYED_INDEX, MODE are defined in index.html
 
@@ -125,7 +127,45 @@ async function saveAsDefault(type) {
 
 function openSettings() {
     document.getElementById('settings-modal').style.display = 'block';
-    loadProviderSettings();
+    // Default to General tab
+    switchSettingsTab('general');
+}
+
+function switchSettingsTab(tab) {
+    const generalPanel = document.getElementById('general-settings-panel');
+    const providerPanel = document.getElementById('provider-settings-panel');
+    const tabs = document.querySelectorAll('.tab-btn');
+
+    tabs.forEach(t => t.classList.remove('active'));
+
+    if (tab === 'general') {
+        generalPanel.style.display = 'block';
+        providerPanel.style.display = 'none';
+        document.querySelector('button[onclick*="general"]').classList.add('active');
+        loadGeneralSettings();
+    } else {
+        generalPanel.style.display = 'none';
+        providerPanel.style.display = 'block';
+        document.querySelector('button[onclick*="providers"]').classList.add('active');
+        loadProviderSettings();
+    }
+}
+
+async function loadGeneralSettings() {
+    try {
+        const res = await fetch('/api/settings/general');
+        if (res.ok) {
+            const settings = await res.json();
+            if (settings.playback_speed) {
+                const speedSlider = document.getElementById('settings-playback-speed');
+                const speedVal = document.getElementById('settings-speed-val');
+                if (speedSlider) speedSlider.value = settings.playback_speed;
+                if (speedVal) speedVal.textContent = parseFloat(settings.playback_speed).toFixed(1);
+            }
+        }
+    } catch (e) {
+        console.error("Error loading general settings:", e);
+    }
 }
 
 function closeSettings() {
@@ -197,6 +237,38 @@ async function loadProviderSettings() {
 
 
 async function saveSettings() {
+    const generalPanel = document.getElementById('general-settings-panel');
+    const isGeneral = generalPanel.style.display === 'block';
+
+    if (isGeneral) {
+        const speed = document.getElementById('settings-playback-speed').value;
+        const settings = { playback_speed: speed };
+
+        try {
+            const res = await fetch('/api/settings/general', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(settings)
+            });
+            if (res.ok) {
+                // Apply speed to player immediately if in view mode
+                const playerSpeed = document.getElementById('playback-speed');
+                if (playerSpeed) {
+                    playerSpeed.value = speed;
+                    const valDisplay = document.getElementById("speed-val");
+                    if (valDisplay) valDisplay.textContent = parseFloat(speed).toFixed(1);
+                    if (audio) audio.playbackRate = parseFloat(speed);
+                    updateDurationDisplay();
+                }
+                alert("General settings saved successfully.");
+                closeSettings();
+            } else {
+                alert("Error saving general settings.");
+            }
+        } catch (e) { console.error("Error saving general settings", e); }
+        return;
+    }
+
     const providerId = document.getElementById('settings-provider-select').value;
     const settings = {};
 
@@ -216,12 +288,12 @@ async function saveSettings() {
             body: JSON.stringify(settings)
         });
         if (res.ok) {
-            alert("Settings saved successfully.");
+            alert("Provider settings saved successfully.");
             closeSettings();
         } else {
-            alert("Error saving settings.");
+            alert("Error saving provider settings.");
         }
-    } catch (e) { console.error("Error saving settings", e); }
+    } catch (e) { console.error("Error saving provider settings", e); }
 }
 
 const PARAGRAPH_DELIMITER = "||PARAGRAPH_BREAK||";
@@ -530,7 +602,7 @@ function setupControls() {
     }
 
     if (speed) {
-        const updateSpeed = () => {
+        const updateSpeed = async () => {
             const val = parseFloat(speed.value);
             if (audio) {
                 audio.playbackRate = val;
@@ -540,6 +612,15 @@ function setupControls() {
                 valDisplay.textContent = val.toFixed(1);
             }
             updateDurationDisplay(); // update remaining/total estimates
+
+            // Persist general speed setting
+            try {
+                await fetch('/api/settings/general', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ playback_speed: val })
+                });
+            } catch (e) { console.error("Error persisting speed:", e); }
         };
 
         speed.addEventListener("change", updateSpeed);
@@ -697,9 +778,11 @@ function renderSegments() {
         const dur = getChunkDuration(i, displaySecs);
         const widthPct = (displaySecs > 0) ? (dur / displaySecs) * 100 : (100 / count);
 
-        seg.style.width = `calc(${widthPct}% - 2px)`;
+        seg.style.width = `${widthPct}%`;
         container.appendChild(seg);
     });
+
+    updateSegmentStyles();
 }
 
 /**
@@ -839,12 +922,15 @@ async function pollStatus() {
         const container = document.getElementById("segments-container");
         if (container) {
             const activeSentences = sentences.filter(s => s !== PARAGRAPH_DELIMITER);
+            const statusChanged = data.status !== lastRenderedStatus;
+            const doneIncreased = data.done > lastRenderedDone;
+
             // Re-render if count mismatch or state is active or if we just finished
             if (container.children.length !== activeSentences.length ||
-                data.status === 'converting' ||
-                data.status === 'processing' ||
-                data.status === 'done') {
+                statusChanged || doneIncreased) {
                 renderSegments();
+                lastRenderedStatus = data.status;
+                lastRenderedDone = data.done || 0;
             }
         }
 
@@ -895,6 +981,7 @@ async function pollStatus() {
         }
 
         updateSentenceStyles(total);
+        updateSegmentStyles();
         updateControls();
 
         // Play next if waiting
@@ -928,11 +1015,35 @@ async function pollStatus() {
     }
 }
 
-function init() {
-    // Poll sidebar on all pages
+async function init() {
+    // 1. Load general settings first (for speed etc)
+    try {
+        const res = await fetch('/api/settings/general');
+        if (res.ok) {
+            const settings = await res.json();
+            if (settings.playback_speed) {
+                const speedSlider = document.getElementById('playback-speed');
+                const speedVal = document.getElementById('speed-val');
+                if (speedSlider) {
+                    speedSlider.value = settings.playback_speed;
+                    if (speedVal) speedVal.textContent = parseFloat(settings.playback_speed).toFixed(1);
+                    if (audio) audio.playbackRate = parseFloat(settings.playback_speed);
+                }
+            }
+        }
+    } catch (e) {
+        console.error("Error loading general settings on init:", e);
+    }
+
+    // 2. Poll sidebar on all pages
     pollSidebar();
 
-    if (MODE !== 'view' || !JOB_ID || !FULL_TEXT) return;
+    if (MODE !== 'view' || !JOB_ID || !FULL_TEXT) {
+        if (MODE === 'new') {
+            onProviderChange();
+        }
+        return;
+    }
 
     // sentences-container is always visible
     sentences = splitSentences(FULL_TEXT);

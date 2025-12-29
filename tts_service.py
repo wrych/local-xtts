@@ -7,148 +7,9 @@ import numpy as np
 import soundfile as sf
 import librosa
 
-from TTS.api import TTS
-from config import MODEL_NAME, TARGET_SAMPLE_RATE, SPEAKERS, LANGUAGES
-import db 
-import json
-from abc import ABC, abstractmethod
-
-class TTSProvider(ABC):
-    @abstractmethod
-    def get_voices(self, language: str = None) -> list[str]:
-        pass
-
-    @abstractmethod
-    def get_languages(self) -> list[str]:
-        pass
-
-    @abstractmethod
-    def synthesize(self, text: str, voice: str, language: str, output_path: str, use_cuda: bool = True):
-        pass
-
-class LocalTTSProvider(TTSProvider):
-    def __init__(self):
-        self._tts_gpu = None
-        self._tts_cpu = None
-
-    def _get_tts(self, use_cuda: bool) -> TTS:
-        if use_cuda:
-            if self._tts_gpu is None:
-                print("[INFO] Loading XTTS model for GPU…")
-                self._tts_gpu = TTS(MODEL_NAME)
-                try:
-                    self._tts_gpu.to("cuda")
-                except Exception as e:
-                    print(f"[WARN] Failed to move model to CUDA: {e}")
-            return self._tts_gpu
-        else:
-            if self._tts_cpu is None:
-                print("[INFO] Loading XTTS model for CPU…")
-                self._tts_cpu = TTS(MODEL_NAME)
-                self._tts_cpu.to("cpu")
-            return self._tts_cpu
-
-    def get_voices(self, language: str = None) -> list[str]:
-        return SPEAKERS
-
-    def get_languages(self) -> list[str]:
-        return LANGUAGES
-
-    def synthesize(self, text: str, voice: str, language: str, output_path: str, use_cuda: bool = True):
-        tts = self._get_tts(use_cuda)
-        tts.tts_to_file(
-            text=text,
-            file_path=output_path,
-            speaker=voice,
-            language=language,
-        )
-
-class GoogleTTSProvider(TTSProvider):
-    def __init__(self):
-        self._client = None
-        self._voice_cache = None
-        self._lang_cache = None
-
-    def _get_client(self):
-        if self._client is None:
-            from google.cloud import texttospeech
-            import os
-            import json
-            
-            settings = db.get_provider_settings("google")
-            creds_json = settings.get("google_service_account")
-            
-            if creds_json:
-                # Create temporary file if needed or use google-auth from dict
-                # Simplest is to save it to a temp file and set GOOGLE_APPLICATION_CREDENTIALS
-                import tempfile
-                fd, path = tempfile.mkstemp(suffix=".json")
-                try:
-                    with os.fdopen(fd, 'w') as tmp:
-                        tmp.write(creds_json)
-                    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path
-                    self._client = texttospeech.TextToSpeechClient()
-                finally:
-                    # Note: if we delete it now, Client might fail later if it re-reads?
-                    # Actually SDK usually reads it on init.
-                    pass
-            else:
-                # Try default credentials (env var)
-                self._client = texttospeech.TextToSpeechClient()
-        return self._client
-
-    def get_voices(self, language: str = None) -> list[str]:
-        try:
-            client = self._get_client()
-            voices = client.list_voices(language_code=language)
-            # If language is None, it returns all voices.
-            # Google SDK respects language_code filter in list_voices.
-            return sorted([v.name for v in voices.voices])
-        except Exception as e:
-            print(f"[ERROR] Failed to list Google voices: {e}")
-            return ["en-US-Standard-A"] # Fallback
-
-    def get_languages(self) -> list[str]:
-        if self._lang_cache is None:
-            try:
-                client = self._get_client()
-                voices = client.list_voices()
-                langs = set()
-                for v in voices.voices:
-                    for lc in v.language_codes:
-                        langs.add(lc)
-                self._lang_cache = sorted(list(langs))
-            except Exception as e:
-                print(f"[ERROR] Failed to list Google languages: {e}")
-                return ["en-US"] # Fallback
-        return self._lang_cache
-
-    def synthesize(self, text: str, voice: str, language: str, output_path: str, use_cuda: bool = True):
-        from google.cloud import texttospeech
-        client = self._get_client()
-
-        synthesis_input = texttospeech.SynthesisInput(text=text)
-        
-        # Voice selection
-        # If language is en-US but voice is en-GB-Standard-A, Google might complain if we don't match.
-        # Usually we use the voice's natural language.
-        # Let's try to parse language from voice name if it doesn't match provided.
-        
-        voice_params = texttospeech.VoiceSelectionParams(
-            name=voice,
-            language_code=language
-        )
-
-        audio_config = texttospeech.AudioConfig(
-            audio_encoding=texttospeech.AudioEncoding.LINEAR16
-        )
-
-        response = client.synthesize_speech(
-            input=synthesis_input, voice=voice_params, audio_config=audio_config
-        )
-
-        with open(output_path, "wb") as out:
-            out.write(response.audio_content)
+from config import TARGET_SAMPLE_RATE
+import db
+from providers import LocalTTSProvider, GoogleTTSProvider
 
 class ProviderRegistry:
     def __init__(self):
@@ -157,7 +18,7 @@ class ProviderRegistry:
             "google": GoogleTTSProvider()
         }
 
-    def get_provider(self, provider_id: str) -> TTSProvider:
+    def get_provider(self, provider_id: str) -> any:
         return self._providers.get(provider_id)
 
     def list_providers(self) -> list[dict]:

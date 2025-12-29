@@ -250,29 +250,53 @@
     <div id="settings-modal" class="modal">
         <div class="modal-content">
             <span class="close" onclick="closeSettings()">&times;</span>
-            <h2 style="margin-top: 0;">Provider Settings</h2>
-            <div class="form-group">
-                <label for="settings-provider-select">Select Provider to Configure</label>
-                <select id="settings-provider-select" onchange="loadProviderSettings()">
-                    {% for prov in providers %}
-                    <option value="{{ prov.id }}">{{ prov.name }}</option>
-                    {% endfor %}
-                </select>
+            <h2 style="margin-top: 0;">Settings</h2>
+
+            <div class="settings-tabs"
+                style="display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid #334155;">
+                <button type="button" class="tab-btn active" onclick="switchSettingsTab('general')">General</button>
+                <button type="button" class="tab-btn" onclick="switchSettingsTab('providers')">Providers</button>
             </div>
-            <div id="settings-fields">
-                <!-- Dynamic fields based on provider -->
+
+            <div id="general-settings-panel">
+                <div class="form-group">
+                    <label for="settings-playback-speed">Default Playback Speed</label>
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <input type="range" id="settings-playback-speed" min="0.5" max="3.0" step="0.1" value="1.0"
+                            oninput="document.getElementById('settings-speed-val').textContent = parseFloat(this.value).toFixed(1)">
+                        <span style="min-width: 40px;"><span id="settings-speed-val">1.0</span>x</span>
+                    </div>
+                    <div class="small-hint">Global playback speed for all conversions.</div>
+                </div>
             </div>
-            <hr style="border: 0; border-top: 1px solid #334155; margin: 1.5rem 0;">
-            <h3 style="font-size: 1rem; margin-bottom: 1rem;">Default Selection</h3>
-            <div class="form-group">
-                <label for="settings-default-language">Default Language</label>
-                <select id="settings-default-language"></select>
+
+            <div id="provider-settings-panel" style="display: none;">
+                <div class="form-group">
+                    <label for="settings-provider-select">Select Provider to Configure</label>
+                    <select id="settings-provider-select" onchange="loadProviderSettings()">
+                        {% for prov in providers %}
+                        <option value="{{ prov.id }}">{{ prov.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div id="settings-fields">
+                    <!-- Dynamic fields based on provider -->
+                </div>
+                <hr style="border: 0; border-top: 1px solid #334155; margin: 1.5rem 0;">
+                <h3 style="font-size: 1rem; margin-bottom: 1rem;">Default Selection</h3>
+                <div class="form-group">
+                    <label for="settings-default-language">Default Language</label>
+                    <select id="settings-default-language"></select>
+                </div>
+                <div class="form-group">
+                    <label for="settings-default-voice">Default Voice</label>
+                    <select id="settings-default-voice"></select>
+                </div>
             </div>
-            <div class="form-group">
-                <label for="settings-default-voice">Default Voice</label>
-                <select id="settings-default-voice"></select>
+
+            <div style="margin-top: 2rem;">
+                <button type="button" onclick="saveSettings()">Save Settings</button>
             </div>
-            <button type="button" onclick="saveSettings()">Save Settings</button>
         </div>
     </div>
 
